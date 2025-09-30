@@ -17,6 +17,9 @@ The main tool for JSON management is `bids_json_tool.sh` (shell wrapper) or `bid
 
 # List all tags in your dataset
 ./bids_json_tool.sh list -r /path/to/bids
+
+# Rename filenames safely (dry-run first!)
+./bids_rename_tool.sh -r /path/to/bids --modality func --remove-entity acq --dry-run
 ```
 
 ## 📋 Available Tools
@@ -41,10 +44,22 @@ The main tool for JSON management is `bids_json_tool.sh` (shell wrapper) or `bid
 - ✅ Robust error handling
 - ✅ Verbose logging options
 
-### 2. Legacy Tools (for reference)
+### 2. BIDS Rename Manager (`bids_rename_manager.py` + `bids_rename_tool.sh`)
+
+**Purpose**: Safely rename BIDS files while respecting entity rules and paired sidecars
+
+**Key Features**:
+- ✅ Entity-aware transformations (`--set-entity`, `--remove-entity`)
+- ✅ String level edits (`--remove-substring`, `--replace`)
+- ✅ Same filtering logic as JSON manager (sessions, modalities, filename patterns)
+- ✅ Dry-run previews and verbose logging
+- ✅ Optional backups stored under `sourcedata/backup`
+- ✅ Handles groups of sidecar/data files together to keep BIDS-valid pairs
+
+### 3. Legacy Tools (for reference)
 
 - `rename_json.sh`: Original string replacement tool (limited functionality)
-- `rename_files.sh`: File renaming utility
+- `rename_files.sh`: Early file renaming utility (superseded by `bids_rename_manager.py`)
 - `dcm_plausibility.sh`: DICOM temporal validation tool
 
 ## 📖 Detailed Usage Guide
@@ -141,7 +156,7 @@ Use glob patterns to target specific files:
 # Skip backup creation (faster but less safe)
 ./bids_json_tool.sh add -r /path/to/bids --tag NewTag --value '"value"' --no-backup
 
-# Backups are created as filename.json.bak by default
+# Backups are stored under sourcedata/backup with mirrored paths (e.g. func/sub-01_task-bold.json.bak)
 ```
 
 #### Verbose Output
@@ -196,6 +211,42 @@ Use glob patterns to target specific files:
 # Validate JSON structure
 ./bids_json_tool.sh validate -r /path/to/bids
 ```
+
+## ✂️ Filename Renaming
+
+Use `bids_rename_tool.sh` (or call `python -m json_manager.bids_rename_manager`) to edit BIDS filenames while keeping sidecar/data pairs aligned.
+
+### Safety Checklist
+- Always start with `--dry-run` to preview planned renames
+- Keep backups enabled (default) to copy originals under `sourcedata/backup`
+- Combine `--ses`, `--modality`, and `--file` filters to target specific subsets
+- Prefer entity operations (`--remove-entity`, `--set-entity`) for BIDS-valid results
+
+### Quick Help
+```bash
+# Show usage summary (same as --help)
+./bids_rename_tool.sh
+
+# Full help including options and examples
+./bids_rename_tool.sh --help
+```
+
+### Common Workflows
+```bash
+# Remove an acquisition label from functional runs (and matching JSON/NIfTI)
+./bids_rename_tool.sh -r /path/to/bids --modality func --remove-entity acq
+
+# Add or update a description entity on anatomical files
+./bids_rename_tool.sh -r /path/to/bids --modality anat --set-entity desc=T1wClean
+
+# Strip a legacy suffix and then insert a new run label (dry-run first)
+./bids_rename_tool.sh -r /path/to/bids --remove-substring "_pilot" --set-entity run=01 --dry-run
+
+# Perform literal replacements before entity cleanup
+./bids_rename_tool.sh -r /path/to/bids --replace "OldTask:newtask" --set-entity task=newtask
+```
+
+The tool automatically renames every file that shares the same base (e.g., `.nii.gz`, `.json`, `.tsv`, `.bval`, `.bvec`) so sidecars stay in sync. Operations are validated to ensure a `sub-` entity remains and that entity values/suffixes contain only BIDS-safe characters.
 
 ## 🛠️ Data Types & JSON Values
 
@@ -309,7 +360,7 @@ The new tool provides the same functionality plus much more!
 
 ## 📝 Notes
 
-- **Backup Safety**: JSON files are automatically backed up (`.json.bak`) unless `--no-backup` is used
+- **Backup Safety**: JSON files are automatically backed up (`.json.bak`) into `sourcedata/backup` unless `--no-backup` is used
 - **BIDS Compliance**: Tool is designed to work with standard BIDS directory structures
 - **Performance**: Efficiently processes large datasets with thousands of JSON files
 - **Error Handling**: Robust error detection and reporting for malformed JSON files

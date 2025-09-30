@@ -28,8 +28,12 @@ class BIDSJSONManager:
     def __init__(self, verbose: bool = False, dry_run: bool = False):
         self.verbose = verbose
         self.dry_run = dry_run
-        self.processed_files = []
-        self.error_files = []
+        self.processed_files: List[str] = []
+        self.error_files: List[str] = []
+        self.backup_enabled: bool = True
+        self.backup_root: Optional[Path] = None
+        self.backup_base_dirname: Path = Path("sourcedata") / "backup"
+        self.dataset_root: Optional[Path] = None
         
     def log(self, message: str, level: str = "INFO") -> None:
         """Log messages with optional verbosity"""
@@ -43,9 +47,12 @@ class BIDSJSONManager:
                         session: Optional[str] = None, modality: Optional[str] = None,
                         filename_pattern: Optional[str] = None) -> List[Path]:
         """Find all JSON files in the given directory tree with optional BIDS-aware filtering"""
-        root = Path(root_path)
-        if not root.exists():
+        root_input = Path(root_path)
+        if not root_input.exists():
             raise FileNotFoundError(f"Directory not found: {root_path}")
+        root = root_input.resolve()
+        self.dataset_root = root
+        self.backup_root = root
         
         # Start with all JSON files
         json_files = list(root.rglob(pattern))
@@ -129,17 +136,28 @@ class BIDSJSONManager:
             self.error_files.append(str(file_path))
             return None
     
-    def save_json_safely(self, file_path: Path, data: Dict[str, Any], backup: bool = True) -> bool:
+    def save_json_safely(self, file_path: Path, data: Dict[str, Any], backup: Optional[bool] = None) -> bool:
         """Safely save JSON file with optional backup"""
         if self.dry_run:
             self.log(f"Would save changes to {file_path}")
             return True
+
+        if backup is None:
+            backup = self.backup_enabled
         
         try:
-            if backup:
-                backup_path = file_path.with_suffix('.json.bak')
-                if file_path.exists():
+            if backup and file_path.exists():
+                backup_path = self._determine_backup_path(file_path)
+                if backup_path is not None:
+                    backup_path.parent.mkdir(parents=True, exist_ok=True)
+                    if backup_path.exists():
+                        backup_path.unlink()
                     file_path.replace(backup_path)
+                else:
+                    fallback = file_path.with_suffix('.json.bak')
+                    if fallback.exists():
+                        fallback.unlink()
+                    file_path.replace(fallback)
             
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
@@ -148,6 +166,21 @@ class BIDSJSONManager:
             self.log(f"Error saving {file_path}: {e}", "ERROR")
             self.error_files.append(str(file_path))
             return False
+
+    def _determine_backup_path(self, file_path: Path) -> Optional[Path]:
+        """Determine the appropriate backup path for a file"""
+        dataset_root = self.dataset_root or self.backup_root
+        if dataset_root is None:
+            return None
+
+        try:
+            relative_path = file_path.resolve().relative_to(dataset_root)
+        except Exception:
+            return None
+
+        backup_dir = dataset_root / self.backup_base_dirname / relative_path.parent
+        backup_filename = relative_path.name + ".bak"
+        return backup_dir / backup_filename
     
     def add_tag(self, root_path: str, tag_name: str, tag_value: Any, 
                 file_pattern: str = "*.json", overwrite: bool = False,
@@ -1008,6 +1041,7 @@ def main():
         # For all other commands, create manager with full arguments
         manager = BIDSJSONManager(verbose=args.verbose, dry_run=args.dry_run)
         backup = not args.no_backup
+        manager.backup_enabled = backup
         
         # Extract filtering parameters
         session = getattr(args, 'ses', None)
