@@ -7,6 +7,7 @@ import argparse
 import fnmatch
 import gzip
 import shutil
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -70,6 +71,8 @@ class BIDSEventImporter:
 
         self._log(f"Found {len(files)} candidate files to import", level="INFO")
 
+        bold_map, bold_task_map = self._index_bold_files(bids_root)
+
         for source_file in files:
             try:
                 info = self._describe_file(source_file)
@@ -87,14 +90,21 @@ class BIDSEventImporter:
                 continue
 
             try:
-                target_dir = self._determine_target_dir(bids_root, info)
+                matched_base = self._match_to_bold(info, bold_map, bold_task_map)
+                target_dir = matched_base.modality_dir
             except RuntimeError as exc:
                 errors.append((source_file, str(exc)))
                 self._log(f"Skipping {source_file.name}: {exc}", level="ERROR")
                 continue
 
             target_dir.mkdir(parents=True, exist_ok=True)
-            target_path = target_dir / source_file.name
+            if info.kind == "events":
+                new_filename = f"{matched_base.base}_events.tsv"
+            else:
+                new_filename = f"{matched_base.base}_physio.tsv"
+            if source_file.suffix == ".gz" or source_file.name.endswith(".tsv.gz"):
+                new_filename += ".gz"
+            target_path = target_dir / new_filename
 
             if target_path.exists() and not self.overwrite:
                 skipped.append((source_file, "already exists"))
@@ -104,17 +114,16 @@ class BIDSEventImporter:
             if self.dry_run:
                 copied.append(target_path)
                 self._log(f"Would copy {source_file} -> {target_path}")
-                continue
+            else:
+                if target_path.exists():
+                    target_path.unlink()
 
-            if target_path.exists():
-                target_path.unlink()
-
-            shutil.copy2(source_file, target_path)
-            copied.append(target_path)
-            self._log(f"Copied {source_file} -> {target_path}")
+                shutil.copy2(source_file, target_path)
+                copied.append(target_path)
+                self._log(f"Copied {source_file} -> {target_path}")
 
             if info.kind == "physio":
-                self._copy_physio_json(source_file, target_dir)
+                self._copy_physio_json(source_file, target_dir, matched_base.base)
 
         return ImportResult(copied, skipped, errors)
 
@@ -197,8 +206,14 @@ class BIDSEventImporter:
             if key and value:
                 entities[key] = value
 
-        if "sub" not in entities:
-            raise ValueError("missing required 'sub-' entity in filename")
+        required_entities = ["sub", "task"]
+        missing_required = [entity for entity in required_entities if entity not in entities]
+        if missing_required:
+            raise ValueError(f"missing required entities: {', '.join(missing_required)}")
+        if "ses" in entities and not entities["ses"]:
+            raise ValueError("session entity must have a value")
+        if "run" in entities and not entities["run"]:
+            raise ValueError("run entity must have a value")
 
         base_without_suffix = "_".join(parts[:-1])
         return self.FileInfo(path=path, kind=suffix, entities=entities, base_without_suffix=base_without_suffix)
@@ -226,41 +241,117 @@ class BIDSEventImporter:
             return False
         return False
 
-    def _determine_target_dir(self, bids_root: Path, info: "BIDSEventImporter.FileInfo") -> Path:
-        sub = info.entities["sub"]
-        session = info.entities.get("ses")
+    @dataclass
+    class MatchedBase:
+        base: str
+        modality_dir: Path
 
-        relative_parts = [f"sub-{sub}"]
-        if session:
-            relative_parts.append(f"ses-{session}")
-        base_relative = Path(*relative_parts)
-
-        candidate_modalities = self.MODALITY_ORDER
-        best_match: Optional[Path] = None
-        base_without_suffix = info.base_without_suffix
-
-        for modality in candidate_modalities:
-            modality_dir = bids_root / base_relative / modality
-            if not modality_dir.exists():
+    def _index_bold_files(
+        self, bids_root: Path
+    ) -> Tuple[
+        Dict[Tuple[str, Optional[str], str, Optional[str]], "BIDSEventImporter.MatchedBase"],
+        Dict[Tuple[str, Optional[str], str], List[Tuple[Optional[str], "BIDSEventImporter.MatchedBase"]]],
+    ]:
+        by_full: Dict[Tuple[str, Optional[str], str, Optional[str]], BIDSEventImporter.MatchedBase] = {}
+        by_task: Dict[Tuple[str, Optional[str], str], List[Tuple[Optional[str], BIDSEventImporter.MatchedBase]]] = defaultdict(list)
+        for nii_path in bids_root.rglob("*_bold.nii.gz"):
+            relative = nii_path.relative_to(bids_root)
+            parts = relative.parts
+            if len(parts) < 3:
                 continue
-            if self._directory_contains_base(modality_dir, base_without_suffix):
-                best_match = modality_dir
-                break
+            sub_part = next((p for p in parts if p.startswith("sub-")), None)
+            if not sub_part:
+                continue
+            ses_part = next((p for p in parts if p.startswith("ses-")), None)
+            base_name = self._strip_extensions(nii_path.name)
+            entities = self._extract_entities_from_base(base_name)
+            task = entities.get("task")
+            run = entities.get("run")
+            if not task:
+                continue
+            subject_value = sub_part.replace("sub-", "")
+            session_value = self._normalize_numeric(entities.get("ses") or (ses_part.replace("ses-", "") if ses_part else None))
+            task_value = task
+            run_value = self._normalize_numeric(run)
 
-        if best_match is None:
-            fallback_modalities = ["func", "beh"] if info.kind == "events" else ["func"]
-            for modality in fallback_modalities:
-                best_match = bids_root / base_relative / modality
-                if best_match.exists():
-                    break
-            else:
-                best_match = bids_root / base_relative / fallback_modalities[0]
-                self._log(
-                    f"No matching data file found for {info.path.name}; using fallback directory {best_match}",
-                    level="WARNING",
-                )
+            base_core = self._remove_trailing_suffix(base_name, "_bold")
+            matched = self.MatchedBase(base=base_core, modality_dir=nii_path.parent)
 
-        return best_match
+            key_full = (subject_value, session_value, task_value, run_value)
+            by_full[key_full] = matched
+
+            key_task = (subject_value, session_value, task_value)
+            by_task[key_task].append((run_value, matched))
+
+        return by_full, by_task
+
+    def _remove_trailing_suffix(self, base_name: str, suffix: str) -> str:
+        if base_name.endswith(suffix):
+            return base_name[: -len(suffix)]
+        return base_name
+
+    def _extract_entities_from_base(self, base_name: str) -> Dict[str, str]:
+        entities: Dict[str, str] = {}
+        for segment in base_name.split("_"):
+            if "-" in segment:
+                key, value = segment.split("-", 1)
+                entities[key] = value
+        return entities
+
+    def _normalize_numeric(self, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if value.isdigit():
+            return str(int(value))
+        return value
+
+    def _match_to_bold(
+        self,
+        info: "BIDSEventImporter.FileInfo",
+        full_map: Dict[Tuple[str, Optional[str], str, Optional[str]], "BIDSEventImporter.MatchedBase"],
+        task_map: Dict[Tuple[str, Optional[str], str], List[Tuple[Optional[str], "BIDSEventImporter.MatchedBase"]]],
+    ) -> "BIDSEventImporter.MatchedBase":
+        subject = info.entities["sub"]
+        session = self._normalize_numeric(info.entities.get("ses"))
+        task = info.entities["task"]
+        run = self._normalize_numeric(info.entities.get("run"))
+
+        key_full = (subject, session, task, run)
+        if run is not None and key_full in full_map:
+            return full_map[key_full]
+
+        key_task = (subject, session, task)
+        matches = task_map.get(key_task, [])
+        if not matches:
+            raise RuntimeError(
+                f"No bold file found for subject {subject}, session {session or 'N/A'}, task {task}"
+            )
+
+        if run is None:
+            if len(matches) == 1:
+                return matches[0][1]
+            available_runs = [m[0] if m[0] is not None else "<none>" for m in matches]
+            raise RuntimeError(
+                "Multiple runs found; include run-<label> in the events filename. Available runs: "
+                + ", ".join(available_runs)
+            )
+
+        # run provided but no exact match; allow fallback to run-less bold if unique
+        candidates = [matched for r, matched in matches if r == run]
+        if candidates:
+            return candidates[0]
+
+        fallback = [matched for r, matched in matches if r is None]
+        if len(fallback) == 1:
+            self._log(
+                f"Using bold file without run label for events run {run}; consider updating BIDS data",
+                level="WARNING",
+            )
+            return fallback[0]
+
+        raise RuntimeError(
+            f"No bold file with run {run} found for subject {subject}, session {session or 'N/A'}, task {task}"
+        )
 
     def _directory_contains_base(self, directory: Path, base_without_suffix: str) -> bool:
         if not directory.exists():
@@ -271,21 +362,21 @@ class BIDSEventImporter:
                 return True
         return False
 
-    def _copy_physio_json(self, physio_file: Path, target_dir: Path) -> None:
+    def _copy_physio_json(self, physio_file: Path, target_dir: Path, base_name: str) -> None:
         json_source = physio_file
         if json_source.suffix == ".gz":
             json_source = json_source.with_suffix("")
         if json_source.suffix == ".tsv":
             json_source = json_source.with_suffix(".json")
         else:
-            base_name = self._strip_extensions(physio_file.name)
-            json_source = physio_file.parent / f"{base_name}.json"
+            json_source = physio_file.parent / f"{base_name}_physio.json"
 
         if not json_source.exists():
             self._log(f"No JSON sidecar found for {physio_file.name}", level="WARNING")
             return
 
-        target_json = target_dir / json_source.name
+        target_json_name = f"{base_name}_physio.json"
+        target_json = target_dir / target_json_name
         if target_json.exists() and not self.overwrite:
             self._log(f"Skipping JSON sidecar {target_json.name}: target already exists")
             return

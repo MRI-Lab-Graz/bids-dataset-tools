@@ -42,6 +42,17 @@ Modern replacement for `copy2bids.sh`. This tool mirrors the experience of the J
 - ✅ Optional overwriting of existing files, with per-file skip summaries
 - ✅ Copies accompanying physio JSON sidecars when available
 - ✅ Minimum line-count safeguard for suspiciously small events files
+- ✅ Renames incoming files to match the existing `_bold.nii.gz` base names so datasets stay BIDS-valid
+- ✅ Strictly checks that filenames declare `sub-`, `task-`, and (when present) `ses-` / `run-` entities
+
+### Input Requirements
+
+- Incoming filenames **must** include at least `sub-<ID>` and `task-<label>` segments (for example `sub-01_task-rest_events.tsv`).
+- If your BIDS dataset is organised by session (`ses-XX`) or run (`run-XX`), the incoming file **must** include those segments as well.
+- Entity values may be zero-padded or not (`run-1` vs `run-01`); the importer normalises digits automatically.
+- Files that fail these checks, or that cannot be matched to an existing `_bold.nii.gz`, are skipped and reported in the summary.
+
+Once a match is found, the importer rewrites the filename to the canonical BIDS base (e.g. `sub-01_ses-02_task-rest_run-01_events.tsv[.gz]`) before copying it into the modality folder that holds the corresponding bold data.
 
 ### Quick Start
 
