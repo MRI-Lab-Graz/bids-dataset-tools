@@ -29,19 +29,39 @@ This script converts log files from Neurobehavioral Systems' Presentation softwa
 ```sh
 python pres2bids.py log_files/ bids/ summary_log.tsv --start-event-code Beginn --search-strings Fixation,Response,Mask,Comp,Hit
 ```
-## BIDS Events File Organizer (copy2bids.sh)
+## BIDS Events & Physio Importer (`bids_event_importer.py` + `bids_event_tool.sh`)
 
-This Bash script organizes and copies event log files into a BIDS-compliant directory structure. It reads event files from a specified source directory and places them into the appropriate subdirectories within a BIDS folder based on the filenames. If the required BIDS folder structure does not exist, the script will create it and issue a warning.
+Modern replacement for `copy2bids.sh`. This tool mirrors the experience of the JSON/rename managers and safely copies new `_events.tsv` and `_physio.tsv[.gz]` files into an existing BIDS dataset using BIDS-aware pattern matching.
 
-### Features
+### Highlights
 
-- Parses event filenames to determine target directories
-- Verifies and creates necessary directories within the BIDS structure
-- Issues warnings for event files with fewer than 5 lines
-- Displays a custom header with the current date and time at the start of the script
+- ✅ Supports both events (`*_events.tsv`) and physio (`*_physio.tsv.gz`) sidecars
+- ✅ Automatically detects the correct subject/session folder and searches for matching modality directories
+- ✅ Falls back to sensible defaults (`func`, `beh`) when the exact data file is not yet present
+- ✅ Dry-run and verbose modes for transparent previews
+- ✅ Optional overwriting of existing files, with per-file skip summaries
+- ✅ Copies accompanying physio JSON sidecars when available
+- ✅ Minimum line-count safeguard for suspiciously small events files
 
-### Usage
+### Quick Start
 
 ```bash
-./copy2bids.sh -e /path/to/events -b /path/to/BIDS
+# Preview where files would land
+./bids_event_tool.sh -s /incoming/events -b /data/bids --dry-run
+
+# Copy both events and physio sidecars, overwriting existing files if necessary
+./bids_event_tool.sh -s /incoming -b /data/bids --events --physio --overwrite
+
+# Restrict to a particular session/subject and use verbose logging
+./bids_event_tool.sh -s /incoming -b /data/bids --ses 2 --sub sub-05 --verbose
 ```
+
+### Python Entry Point
+
+```bash
+python EventFile/bids_event_importer.py --source /incoming --bids-root /data/bids --physio --dry-run
+```
+
+### Legacy Script (for reference)
+
+- `copy2bids.sh`: Original Bash implementation (still available but superseded by the new importer)
