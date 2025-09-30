@@ -796,12 +796,14 @@ class BIDSJSONManager:
         print(f"\n{'='*80}")
         
         return
+
+    def _parse_value(self, value_str: str) -> Any:
         """Parse string value to appropriate Python type"""
         # Try to parse as JSON first (handles numbers, booleans, arrays, objects)
         try:
             return json.loads(value_str)
         except json.JSONDecodeError:
-            # If JSON parsing fails, treat as string
+            # If JSON parsing fails, treat as plain string
             return value_str
     
     def print_summary(self) -> None:
