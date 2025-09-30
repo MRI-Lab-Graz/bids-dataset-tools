@@ -1,0 +1,6 @@
+{
+  "puls_path": "/Users/karlkoschutnig/Documents/MATLAB/physio/ses-1/resp",
+  "phys_output_dir": "/Users/karlkoschutnig/Documents/MATLAB/physio/bids",
+  "json_bold_path": "/Users/karlkoschutnig/Documents/MATLAB/physio/json_ses1",
+  "nr_vols": 250
+}
