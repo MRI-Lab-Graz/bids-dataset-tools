@@ -1,4 +1,4 @@
-!/usr/bin/env python3
+#!/usr/bin/env python3
 # clean_gzip_mtime_fname.py
 from pathlib import Path
 import os, sys, struct, argparse
