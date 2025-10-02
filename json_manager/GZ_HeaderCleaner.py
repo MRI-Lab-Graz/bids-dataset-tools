@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+!/usr/bin/env python3
 # clean_gzip_mtime_fname.py
 from pathlib import Path
 import os, sys, struct, argparse
@@ -127,10 +127,9 @@ def rewrite_header_only(inf, outf, meta):
     outf.write(new_fixed)
 
     # Danach optionale Felder (in Originalreihenfolge), aber ohne FNAME und ggf. ohne FHCRC
-    # 1) FEXTRA (wenn vorhanden): Bytes 2-Byte Länge + Daten unverändert kopieren
+    # 1) FEXTRA (wenn vorhanden): 2-Byte Länge + Daten unverändert kopieren
     if flg & FEXTRA:
         inf.seek(off['extra_len_off'])
-        # EXTRA len + payload bis extra_end
         outf.write(inf.read(off['extra_end'] - off['extra_len_off']))
 
     # 2) FCOMMENT (falls vorhanden): unverändert kopieren
@@ -143,7 +142,6 @@ def rewrite_header_only(inf, outf, meta):
     # 3) FHCRC ggf. auslassen
     payload_from = off['payload_start']
     if drop_fhcrc and off['fhcrc_off'] is not None:
-        # Payload start verschiebt sich um 2, weil wir FHCRC weglassen
         payload_from = off['fhcrc_off'] + 2
 
     # Rest der Datei (komprimierte Daten + Trailer + evtl. weitere Members) 1:1 kopieren
@@ -164,19 +162,22 @@ def clean_file(path: Path):
         os.replace(tmp, path)
 
 def main():
-    ap = argparse.ArgumentParser(description="Setzt GZIP MTIME=0 und entfernt FNAME (nur Dateien unter func/).")
-    ap.add_argument("rawdata", help="Pfad zu rawdata (rekursiv durchsucht)")
+    ap = argparse.ArgumentParser(
+        description="Setzt GZIP MTIME=0 und entfernt FNAME für alle *.gz unterhalb des angegebenen Containers (rekursiv)."
+    )
+    ap.add_argument("container", help="Pfad zum Top-Level-Ordner (enthält z. B. sub-*/ses-*)")
     ap.add_argument("--dry-run", action="store_true", help="Nur prüfen, nichts ändern")
     args = ap.parse_args()
 
-    root = Path(args.rawdata)
+    root = Path(args.container)
     if not root.exists():
         print(f"Pfad nicht gefunden: {root}", file=sys.stderr)
         sys.exit(1)
 
-    targets = [p for p in root.rglob("*.gz") if "func" in p.parts]
+    # Alle *.gz rekursiv (KEIN Filter mehr auf 'func/')
+    targets = list(root.rglob("*.gz"))
     if not targets:
-        print("Keine *.gz-Dateien unter func/ gefunden.")
+        print("Keine *.gz-Dateien gefunden.")
         return
 
     total = changed = ok = errors = 0
@@ -198,7 +199,6 @@ def main():
                 print(f"[WOERDE] {p}  ({', '.join(tag)})")
             else:
                 try:
-                    # tatsächliche Änderung
                     clean_file(p)
                     print(f"[FIXED ] {p}  ({', '.join(tag)})")
                     changed += 1
